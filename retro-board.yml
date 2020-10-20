@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Retro Board
+
+Parameters:
+
+  Image:
+    Description: The AMI to use for the EC2 instance.
+    Type: String
+    ConstraintDescription: Must be a valid AMI.
+    Default: ami-032598fcc7e9d1c7a
+
+  InstanceType:
+    Description: The instance type to use.
+    Type: String
+    ConstraintDescription: Must be a valid instance type.
+    Default: t2.micro
+
+  KeyPair:
+    Description: The EC2 Keypair to use.
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be a valid EC2 key pair.
+
+  #SecurityGroup:
+  #  Description: The default security group to use.
+  #  Type: AWS::EC2::SecurityGroup::Id
+  #  ConstraintDescription: Must be an existing security group.
+
+  #Subnet:
+  #  Description: The private subnet to place the server on.
+  #  Type: AWS::EC2::Subnet::Id
+  #  ConstraintDescription: Should be a private subnet created by the network stack.
+
+  #Storage:
+  #  Description: The volume to store Retro Board data.
+  #  Type: AWS::EC2::Volume::Id
+  #  ConstraintDescription: The volume to store Retro Board data.
+
+  #VolumeAvailabilityZone:
+  #  Description: The hosted zone for the public domain name.
+  #  Type: String
+  #  ConstraintDescription: Must be a valid availability zone.
+
+  #PublicZone:
+  #  Description: the hosted zone for the public domain name.
+  #  Type: AWS::Route53::HostedZone::Id
+  #  ConstraintDescription:  Should be the hosted zone created when buying a public domain name.
+
+  #PrivateZone:
+  #  Description: The hosted zone for the internal sub domain name.
+  #  Type: AWS::Route53::HostedZone::Id
+  #  ConstraintDescription: Should be the hosted zone created by the network stack.
+
+  #LdapUsername:
+  #  Description: The manager common name for ldap.
+  #  Type: String
+
+  #LdapPassword:
+  #  Description: The manager password for ldap.
+  #  Type: String
+
+  #LdapServer:
+  #  Description: The server url including port for ldap.
+  #  Type: String
+  
+  #LdapBaseDN:
+  #  Description: The base DN for ldap.
+  #  Type: String
+
+  #LdapUserFilter:
+  #  Description: The user filter for ldap.
+  #  Type: String
+
+  #DeploymentVPC:
+  #  Description: The VPC to deploy this service into.
+  #  Type: AWS::EC2::VPC::Id
+  #  ConstraintDescription: Must be a VPCA within your cluster.
+
+  #RootDomainName:
+  #  Description: The root domain name chosen to use in DNS.
+  #  Type: String
+
+  #LoadBalancerSecurityGroups:
+  #  Description: The list of security groups to add to the load balancer, this is for the internet facing egress traffic.
+  #  Type: List<AWS::EC2::SecurityGroup::Id>
+  #  ConstraintDescription: Must be already existing security groups.
+  
+  #LoadBalancerCert:
+  #  Description: The ARN for the certificate that the load balancer will use on external https endpoints.
+  #  Type: String
+  #  ConstraintDescription: Must be already existing security groups.
+
+Resources: 
+  #EC2AssumeRole:
+  #  Type: AWS::IAM::Role
+  #  Properties:
+  #    AssumeRolePolicyDocument:
+  #      Statement:
+  #        - Effect: Allow
+  #          Principle:
+  #            Service:
+  #              - ec2.amazonaws.com
+  #          Action:
+  #            - 'sts:AssumeRole'
+  #    Path: /
+  
+  #InstanceProfile:
+  #  Type: AWS::IAM::InstanceProfile
+  #  Properties:
+  #    Path: /
+  #    Roles:
+  #      - Ref: EC2AssumeRole
+  
+  RetroBoard:
+    Type: AWS::EC2::Instance
+    Metadata:
+      Comment: RetroBoard in docker.
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "git"
+            - "docker"
+            - "compose"
+            - "application"
+        
+        git:
+          packages:
+            yum:
+              git: []
+              
+        docker:
+          packages:
+            yum:
+               docker: []
+          services:
+            sysvinit:
+              docker:
+                enabled: "true"
+                ensureRunning: "true"
+          commands:
+            'permissions':
+              command: "sudo usermod -a -G docker ec2-user"
+       
+        compose:
+          commands:
+            'install':
+              command: 'sudo curl -L https://github.com/docker/compose/releases/download/1.25.5/docker-compose-`uname -s`-`uname -m` -o /usr/local/bin/docker-compose'
+            'permissions':
+              command: sudo chmod a+x /usr/local/bin/docker-compose
+        
+        application:
+          commands:
+            'create source directory':
+              command: "sudo mkdir -p /src"
+            'set folder permissions': 
+              command: "sudo chmod 777 /src"
+            'clone repository':
+              command: "sudo git clone https://github.com/antoinejaussoin/retro-board.git /src/retro-board"
+
+    Properties:
+      ImageId: 
+        Ref: Image
+      #AvailabilityZone:
+      #  Ref: VolumeAvailabilityZone
+      InstanceType: 
+        Ref: InstanceType     
+      #SecurityGroupIds:
+      #  Ref: SecurityGroup
+      #SubnetId:
+      #  Ref: Subnet
+      KeyName:
+        Ref: KeyPair
+      #IamInstanceProfile:
+      #  Ref: InstanceProfile
+      Tags:
+        - Key: "Name"
+          Value: "Retro Board"
+        #- Key: "its-control-ec2-auto-start"
+        #  Value: "yes"
+        #- Key: "its-control-ec2-auto-stop"
+        #  Value: "yes"
+        #- Key: "domanNames"
+        #  Value: "yes"
+        #- Key: "serverPort"
+        #  Value: "80"
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -xe
+
+          sudo yum -y update
+          sudo yum -y upgrade
+          sudo yum install -y python-setuptools
+          sudo yum install -y aws-cfn-bootstrap
+
+          sudo /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource RetroBoard --configsets setup --region ${AWS::Region} 
+          /usr/local/bin/docker-compose -f /src/retro-board/docker-compose.example.yml up -d
+
+  #InternalRetroDNSRecord:
+  #  Type: AWS::Route53::RecordSet
+  #  Properties: 
+  #    HostedZoneId:
+  #      Ref: PrivateZone
+  #    Comment: Internal DNS record so the other sevrer can find the Retro Board server.
+  #    Name: !Sub
+  #      - retro.${Domain}
+  #      - { Domain : !Ref RootDomainName }
+  #    Type: "A"
+  #    TTL: "900"
+  #    ResourceRecords: !GetAtt RetroBoard.PrivateIp
+
+  #ExternalRetroDNSRecord:
+  #  Type: AWS::Route53::RecordSet
+  #  Properties: 
+  #    HostedZoneId:
+  #      Ref: PublicZone
+  #      Comment: "Public DNS for Retro Board web access."
+  #      Name: !Sub
+  #      - retro.${Domain}
+  #      - { Domain : !Ref RootDomainName }
+  #      Type: "CNAME"
+  #      TTL: "900"
+  #      SetIdentifier: "Retro Board server CNAME."
+  #      Weight: "4"
+  #      ResourceRecords:
+  #        Ref: RootDomainName
